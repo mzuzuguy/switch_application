@@ -1,32 +1,38 @@
-import {Entity, PrimaryGeneratedColumn, Column} from 'typeorm';
+import {
+  IsNotEmpty,
+  IsNumber,
+  IsString,
+  IsEnum,
+  IsPositive,
+} from 'class-validator';
+import { TransactionStatus } from '../enums/transaction-status.enum';
 
-@Entity('transactions')
+export class CreateTransactionDto {
+  @IsNumber()
+  @IsPositive()
+  @IsNotEmpty()
+  amount: number;
 
-export class Transaction {
-    //auto-generated ID for each transaction
-    @PrimaryGeneratedColumn()
-    id: string;
+  @IsEnum(TransactionStatus)
+  status: TransactionStatus;
 
-    @Column()
-    amount: number;
+  @IsString()
+  @IsNotEmpty()
+  agent_id: string;
 
-    @Column()
-    status: string;
+  @IsString()
+  @IsNotEmpty()
+  sender_number: string;
 
-    @Column()
-    agent_id: string;
+  @IsString()
+  @IsNotEmpty()
+  receiver_number: string;
 
-    @Column()
-    sender_number: number;
+  @IsString()
+  @IsNotEmpty()
+  sender_id: string;
 
-    @Column()
-    receiver_number: number;
-
-    @Column()
-    time_of_transaction: string;
-
-    @Column()
-    sender_id: string;
-    
+  @IsString()
+  @IsNotEmpty()
+  receiver_id: string;
 }
-
