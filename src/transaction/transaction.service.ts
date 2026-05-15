@@ -18,7 +18,7 @@ export class TransactionService {
         // the logic lives inside a function
     async createTransaction(senderId: number, receiverId: number, amount: number): Promise<void> {
 
-        const queryRunner = this.transactionRepository.createQueryRunner();//give me a private chanel/connection to the database
+        const queryRunner = this.dataSource.createQueryRunner();//give me a private chanel/connection to the database
 
         await queryRunner.connect();//open that chanel/connection to the database
 
@@ -38,7 +38,7 @@ export class TransactionService {
             throw new Error('receiver not found')
         }
 
-         if (sender.balance < amount) {//validate if the sender hahs enough money to send
+         if (sender.balance < amount) {//validate if the sender has enough money to send
             throw new Error ('Insufficient funds')
          }
 
@@ -51,9 +51,10 @@ export class TransactionService {
 
         await queryRunner.commitTransaction();//if everything goes well, save the transaction to the database
            return {message: 'Transaction successful'};
+
         } catch (error) {
             await queryRunner.rollbackTransaction();//if anything goes wrong, undo everything that was done in this transaction
-            
+
             throw new BadRequestException(error.message);
         } finally {
             await queryRunner.release();//close the chanel/connection to the database
