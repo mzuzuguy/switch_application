@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
-import { AgentService } from './agent.service';
+import { AgentService } from './agent.-transaction.service';
 
 @Module({
-  providers: [AgentService]
+  providers: [AgentService],
 })
 export class AgentModule {}

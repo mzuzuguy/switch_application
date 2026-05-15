@@ -59,5 +59,5 @@ export class TransactionService {
         } finally {
             await queryRunner.release();//close the chanel/connection to the database
         }
-    ){}
+    }{}
 }
