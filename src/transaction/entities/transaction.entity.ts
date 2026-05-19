@@ -36,3 +36,5 @@ export class CreateTransactionDto {
   @IsNotEmpty()
   receiver_id: string;
 }
+
+export { TransactionStatus };

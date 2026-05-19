@@ -1,63 +1,91 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import { InjectRepository} from '@nestjs/typeorm';
-import { Transaction } from './entities/transaction.entity';
-import {Repository} from 'typeorm';
-import { DataSource } from 'typeorm/browser';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
+import { Transaction, TransactionStatus } from './entities/transaction.entity';
+import { Account } from '../common/entities/account.entity'; // Assuming Account is in common/entities
 
 @Injectable()
 export class TransactionService {
+  constructor(
+    @InjectRepository(Transaction)
+    private transactionRepository: Repository<Transaction>,
+    private dataSource: DataSource, // Retained for multi-table local ledger updates
+  ) {}
 
-    //injects the transaction repository so that we can talk to the database
-    constructor(
-        @InjectRepository(Transaction)
-        private transactionRepository: Repository<Transaction>
+  /**
+   * STEP 1: Just log the intent. DO NOT adjust balances yet.
+   * This generates the reference string you send to PayChangu.
+   */
+  async createPendingTransaction(
+    senderPhone: string,
+    receiverAgentId: string,
+    amount: number,
+    idempotencyKey: string,
+  ): Promise<Transaction> {
+    const transaction = this.transactionRepository.create({
+      idempotencyKey,
+      amount,
+      customerPhone: senderPhone,
+      agentId: receiverAgentId,
+      status: TransactionStatus.CREATED, // State: Awaiting PayChangu collection
+    });
 
-        private dataSource: DataSource //query runner needs a data source to create a connection to the database(QuryRunner lives on DataSource)
+    return await this.transactionRepository.save(transaction);
+  }
 
-    ){}
-        // the logic lives inside a function
-    async createTransaction(senderId: number, receiverId: number, amount: number): Promise<void> {
+  /**
+   * STEP 2: Triggered ONLY when PayChangu fires a webhook confirming 
+   * the customer's cash has landed safely in your ecosystem.
+   * This is where your original atomic QueryRunner code actually belongs!
+   */
+  async executeAgentCredit(idempotencyKey: string, systemFee: number, agentCommission: number): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-        const queryRunner = this.dataSource.createQueryRunner();//give me a private chanel/connection to the database
+    try {
+      // 1. Fetch the logged transaction and lock the row for processing
+      const transaction = await queryRunner.manager.findOne(Transaction, {
+        where: { idempotencyKey },
+        lock: { mode: 'pessimistic_write' },
+      });
 
-        await queryRunner.connect();//open that chanel/connection to the database
+      if (!transaction) throw new Error('Transaction record not found');
+      
+      // Prevent processing an already completed or failed transaction (Idempotency check)
+      if (transaction.status !== TransactionStatus.CREATED) {
+        return; 
+      }
 
-        await queryRunner.startTransaction();// start watching everything i do, don't actually save anything yet
+      // 2. Fetch the target agent's virtual account/wallet profile
+      const agentAccount = await queryRunner.manager.findOne(Account, { 
+        where: { id: transaction.agentId },
+        lock: { mode: 'pessimistic_write' }
+      });
+      if (!agentAccount) throw new Error('Target Agent account not found');
 
-        try {
-            const sender = await queryRunner.manager.findOne(Account, { where: { id: senderId} });//no one else can see this transaction until it goes through
+      // 3. Mathematical ledger update (Credit the agent)
+      // The customer's physical float is already collected via PayChangu, 
+      // so we safely update the agent's internal platform balance.
+      const netPayoutToAgent = transaction.amount - systemFee + agentCommission;
+      agentAccount.balance += netPayoutToAgent;
 
-        const receiver = await queryRunner.manager.findOne(Account, { where: { id: receiverId} });//no one see this transaction until it goes through
+      // 4. Update the state machine status
+      transaction.status = TransactionStatus.PULL_SUCCESS;
+      transaction.systemFee = systemFee;
+      transaction.agentCommission = agentCommission;
 
-        //check if the accounts exist
-        if (!sender) {
-            throw new Error('sender not found')
-        }
+      // 5. Commit everything locally
+      await queryRunner.manager.save(agentAccount);
+      await queryRunner.manager.save(transaction);
+      await queryRunner.commitTransaction();
 
-        if (!receiver) {
-            throw new Error('receiver not found')
-        }
-
-         if (sender.balance < amount) {//validate if the sender has enough money to send
-            throw new Error ('Insufficient funds')
-         }
-
-        sender.balance -= amount;//take the money out of the sender's account
-
-        receiver.balance += amount;//put the money in the receiver's account
-
-        await queryRunner.manager.save(sender);
-        await queryRunner.manager.save(receiver);
-
-        await queryRunner.commitTransaction();//if everything goes well, save the transaction to the database
-           return {message: 'Transaction successful'};
-
-        } catch (error) {
-            await queryRunner.rollbackTransaction();//if anything goes wrong, undo everything that was done in this transaction
-
-            throw new BadRequestException(error.message);
-        } finally {
-            await queryRunner.release();//close the chanel/connection to the database
-        }
-    }{}
+      // STEP 3 NEXT: Trigger background worker to fire the PayChangu OUTBOUND Payout API to the agent's actual phone line.
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw new BadRequestException((error as any).message);
+    } finally {
+      await queryRunner.release();
+    }
+  }
 }
